@@ -1,0 +1,108 @@
+#python 
+
+# Run this cell first to set up everything
+!pip install -U openai-whisper ffmpeg-python pydub noisereduce ipywidgets
+!apt-get install ffmpeg
+ 
+import os
+import time
+import whisper
+import numpy as np
+from pydub import AudioSegment
+from noisereduce import reduce_noise
+from IPython.display import display, clear_output
+import ipywidgets as widgets
+from google.colab import files
+ 
+# Create widget interface
+model_selector = widgets.Dropdown(
+    options=["tiny", "base", "small", "medium", "large"],
+    value="medium",
+    description="Model Size:"
+)
+ 
+language_selector = widgets.Dropdown(
+    options=["auto", "English", "hindi", "tamil", "kannada"],
+    value="auto",
+    description="Language:"
+)
+ 
+process_button = widgets.Button(description="Start Transcription")
+output_area = widgets.Output()
+progress_bar = widgets.FloatProgress(value=0.0, min=0.0, max=1.0, description='Progress:')
+ 
+display(model_selector, language_selector, progress_bar, process_button, output_area)
+ 
+# Audio processing functions
+def convert_to_audio(video_path, audio_output):
+    !ffmpeg -i "{video_path}" -q:a 0 -map a "{audio_output}" -y
+ 
+def preprocess_audio(input_path):
+    audio = AudioSegment.from_file(input_path)
+    samples = np.array(audio.get_array_of_samples())
+   
+    # Noise reduction
+    reduced_noise = reduce_noise(y=samples, sr=audio.frame_rate)
+    cleaned_audio = audio._spawn(reduced_noise.astype(np.int16))
+   
+    # Normalize
+    cleaned_audio = cleaned_audio.normalize()
+    return cleaned_audio, audio.frame_rate
+ 
+# Transcription handler
+def on_process_button_clicked(b):
+    with output_area:
+        clear_output()
+        print("Starting transcription process...")
+       
+        # Upload files
+        uploaded = files.upload()
+        if not uploaded:
+            print("No files uploaded!")
+            return
+           
+        # Load model
+        model = whisper.load_model(model_selector.value)
+       
+        for filename in uploaded.keys():
+            print(f"\nProcessing {filename}...")
+           
+            # Convert video to audio if needed
+            if filename.lower().endswith(('.mp4', '.avi', '.mov')):
+                audio_path = f"temp_{filename.split('.')[0]}.wav"
+                convert_to_audio(filename, audio_path)
+            else:
+                audio_path = filename
+               
+            # Preprocess audio
+            cleaned_audio, sr = preprocess_audio(audio_path)
+            cleaned_audio.export("processed_audio.wav", format="wav")
+           
+            # Transcribe
+            progress_bar.value = 0.3
+            result = model.transcribe("processed_audio.wav",
+                                    language=None if language_selector.value == "auto" else language_selector.value)
+            progress_bar.value = 0.9
+           
+            # Show results
+            print("\nTranscription Result:")
+            print(result["text"])
+           
+            # Save to file
+            with open(f"transcription_{filename}.txt", "w") as f:
+                f.write(result["text"])
+           
+            # Download button
+            print("\nSaving results...")
+            files.download(f"transcription_{filename}.txt")
+           
+            # Cleanup
+            if filename.lower().endswith(('.mp4', '.avi', '.mov')):
+                os.remove(audio_path)
+            os.remove("processed_audio.wav")
+           
+            progress_bar.value = 1.0
+            time.sleep(0.5)
+            progress_bar.value = 0.0
+ 
+process_button.on_click(on_process_button_clicked)
